@@ -47,12 +47,13 @@ public static class Program
             var benchmarkDir = args.Length > 0 ? args[0] : SteamGameLocator.Locate(AppId);
             var exePath = FindExe(benchmarkDir);
             var iniPath = Path.Combine(benchmarkDir, "b1", "Saved", "Config", "Windows", "GameUserSettings.ini");
-            var historyDir = Path.Combine(Path.GetTempPath(), "b1", "BenchMarkHistory", "Tool");
+            var historyDirs = ResultLocator.FindExistingDirs(benchmarkDir);
+            if (historyDirs.Count == 0) historyDirs = ResultLocator.GetCandidateDirs(benchmarkDir);
 
             Console.WriteLine($"Директория бенчмарка:  {benchmarkDir}");
             Console.WriteLine($"Исполняемый файл:       {exePath}");
             Console.WriteLine($"Файл настроек:          {iniPath}");
-            Console.WriteLine($"Папка результатов:      {historyDir}");
+            Console.WriteLine("Папки результатов:      " + string.Join(" | ", historyDirs));
             Console.WriteLine();
             Console.WriteLine("Проверьте: Steam запущен и вы владеете Black Myth: Wukong Benchmark Tool.");
             Console.WriteLine("Во время прогона не трогайте мышь и клавиатуру. Нажмите Enter, когда будете готовы.");
@@ -64,20 +65,34 @@ public static class Program
             var outputDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "WukongBench", "results", DateTime.Now.ToString("yyyyMMdd_HHmmss"));
             Directory.CreateDirectory(outputDir);
 
-            // Весь вывод консоли дублируется в журнал прогона.
-            using (var log = new StreamWriter(Path.Combine(outputDir, "run.log"), append: false, Encoding.UTF8))
-            {
-                Console.SetOut(new TeeTextWriter(Console.Out, log));
-                Console.SetError(new TeeTextWriter(Console.Error, log));
-                return RunMain(args, benchmarkDir, exePath, iniPath, historyDir, outputDir, settings);
-            }
+            // Весь вывод консоли дублируется в журнал прогона, включая exceptions.
+            return RunMain(args, benchmarkDir, exePath, iniPath, historyDirs, outputDir, settings);
         }
-        catch (Exception e)
+catch (Exception e)
         {
             Console.Error.WriteLine($"Ошибка: {e.Message}");
-            Console.Error.WriteLine("Подробности: см. stack trace ниже.");
+            Console.Error.WriteLine("Подробности: см. stack trace выше.");
             Console.Error.WriteLine(e);
+            // Также записать в лог, если он уже открыт.
+            TryAppendToRunLog(e);
             return 1;
+        }
+    }
+
+    /// <summary>Если папка результатов уже создана — дописываем стек в run.log для диагностики.</summary>
+    private static void TryAppendToRunLog(Exception e)
+    {
+        try
+        {
+            var basePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "WukongBench", "results");
+            var dir = new DirectoryInfo(basePath).GetDirectories().OrderByDescending(d => d.CreationTime).FirstOrDefault();
+            if (dir is null) return;
+            File.AppendAllText(Path.Combine(dir.FullName, "run.log"),
+                $"{DateTime.Now:HH:mm:ss} [FATAL] {e}\n", Encoding.UTF8);
+        }
+        catch
+        {
+            // лог — не самоцель
         }
     }
 
@@ -87,33 +102,79 @@ public static class Program
         string benchmarkDir,
         string exePath,
         string iniPath,
-        string historyDir,
+        IReadOnlyList<string> historyDirs,
         string outputDir,
         SettingsFile settings)
     {
+        // Лог пишем с самого начала — чтобы исключения попадали в run.log.
+        using var log = new StreamWriter(Path.Combine(outputDir, "run.log"), append: false, Encoding.UTF8);
+        using (var teeOut = new TeeTextWriter(Console.Out, log))
+        using (var teeErr = new TeeTextWriter(Console.Error, log))
+        {
+            Console.SetOut(teeOut);
+            Console.SetError(teeErr);
+            try
+            {
+                return RunMainCore(benchmarkDir, exePath, historyDirs, outputDir, settings, log);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine($"Ошибка: {e.Message}");
+                Console.Error.WriteLine(e);
+                return 1;
+            }
+            finally
+            {
+                Console.Out.Flush();
+                Console.Error.Flush();
+            }
+        }
+    }
+
+    private static int RunMainCore(
+        string benchmarkDir,
+        string exePath,
+        IReadOnlyList<string> historyDirs,
+        string outputDir,
+        SettingsFile settings,
+        TextWriter log)
+    {
         var system = SystemInfo.Collect();
-        var runner = new BenchmarkRunner(historyDir, Console.WriteLine);
+        Console.WriteLine($"Система: {system.MachineName}, {system.Os}, CPU {system.Cpu} ({system.LogicalCores} ядер), RAM {system.RamGb:0.#} ГБ");
+
+        var runner = new BenchmarkRunner(benchmarkDir, exePath, historyDirs, Console.WriteLine);
         var results = new List<(BenchmarkProfile Profile, BenchmarkResult Result)>();
 
         settings.Backup();
         Console.CancelKeyPress += (_, _) => SafeRestore(settings);
         try
         {
+            // Если в прошлый раз игра не закрылась — прибраться.
+            runner.KillAnyStale(allowMissing: true);
+
             foreach (var profile in new[] { BenchmarkProfile.Cpu, BenchmarkProfile.Gpu })
             {
                 Console.WriteLine();
                 Console.WriteLine($"[{profile.Name}-тест] Применяю настройки и запускаю бенчмарк...");
                 settings.Apply(profile);
 
-                var (rawPath, result) = runner.Run(exePath);
+                var (rawPath, result) = runner.Run();
                 File.Copy(rawPath, Path.Combine(outputDir, $"{profile.Name.ToLowerInvariant()}_raw.json"));
                 results.Add((profile, result));
 
                 Console.WriteLine($"[{profile.Name}-тест] Готово: средний FPS {result.FPSAvg:0}, доля кадров, где CPU дольше GPU: {result.CpuBoundShare:0}%");
+
+                // Между проходами даём системе остыть и окну полностью закрыться.
+                if (profile.Name == "CPU")
+                {
+                    Console.WriteLine("Пауза перед GPU-тестом (10 с)...");
+                    runner.PauseBetweenRuns();
+                }
             }
         }
         finally
         {
+            runner.KillAnyStale(allowMissing: true);
             settings.Restore();
         }
 

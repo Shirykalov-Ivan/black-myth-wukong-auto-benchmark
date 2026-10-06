@@ -39,6 +39,22 @@ public sealed class SettingsFile(string path, Action<string> log)
     public void Restore()
     {
         if (!File.Exists(_backupPath)) return;
+        // Несколько попыток: файл может быть занят только что убитым процессом.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                File.Copy(_backupPath, path, overwrite: true);
+                File.Delete(_backupPath);
+                log("Исходный конфиг восстановлен.");
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(500);
+            }
+        }
+        // Последняя попытка — ошибка всплывёт наружу.
         File.Copy(_backupPath, path, overwrite: true);
         File.Delete(_backupPath);
         log("Исходный конфиг восстановлен.");
@@ -62,6 +78,16 @@ public sealed class SettingsFile(string path, Action<string> log)
             SetIniValue(lines, section, key, value);
 
         File.WriteAllText(path, string.Join("\r\n", lines), encoding);
+
+        // Самопроверка: игра может молча проигнорировать запись (напр. из-за прав).
+        var written = File.ReadAllText(path);
+        foreach (var (key, value) in profile.UiSettings)
+        {
+            if (!written.Contains($"(\"{key}\", \"{value}\")", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Самопроверка конфига не прошла: ключ \"{key}\" не записался со значением \"{value}\". " +
+                    "Проверьте права на запись в папке установки (запустите от администратора).");
+        }
     }
 
     // UISettingData=(("Key", "Value"),("Key2", "Value2"),...)

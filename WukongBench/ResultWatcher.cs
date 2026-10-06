@@ -3,46 +3,30 @@ namespace WukongBench;
 using PathSet = HashSet<string>;
 
 /// <summary>
-/// Отслеживает появление новых файлов результатов в %TEMP%\b1\BenchMarkHistory\Tool\&lt;unix-время&gt;.
-/// Папка одна на все запуски, поэтому после каждого прогона снимок «уже виденных» файлов обновляется.
+/// Отслеживает появление новых файлов результатов. Опрос каталога (polling) вместо FileSystemWatcher:
+/// событие Created срабатывает в момент создания файла, но бенчмарк ещё дописывает в него ~10 000 записей —
+/// на готовый, валидный JSON можно наткнуться только перечитывая файлы, пока не распарсится.
 /// </summary>
-public sealed class ResultWatcher : IDisposable
+public sealed class ResultWatcher
 {
-    private readonly string _historyDir;
+    private readonly IReadOnlyList<string> _searchDirs;
     private readonly PathSet _seen = new(StringComparer.OrdinalIgnoreCase);
-    private FileSystemWatcher? _watcher;
     private readonly object _lock = new();
 
-    public ResultWatcher(string historyDir)
+    public ResultWatcher(IReadOnlyList<string> historyDirs, IEnumerable<string>? preExisting = null)
     {
-        _historyDir = historyDir;
-        Directory.CreateDirectory(historyDir);
-        foreach (var f in Directory.GetFiles(historyDir)) _seen.Add(f);
+        _searchDirs = historyDirs;
+        if (preExisting is not null)
+            foreach (var f in preExisting) _seen.Add(f);
     }
 
-    /// <summary>Запускает фоновое наблюдение за появлением новых файлов в папке истории.</summary>
-    public void Start()
-    {
-        _watcher = new FileSystemWatcher(_historyDir)
-        {
-            IncludeSubdirectories = true,
-            EnableRaisingEvents = true,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
-        };
-        _watcher.Created += (_, e) => NoteIfSeen(e.FullPath);
-    }
-
-    public void Dispose()
-    {
-        _watcher?.Dispose();
-        _watcher = null;
-    }
-
-    /// <summary>Непосредственно после старта прогона: запоминаем, что папка уже могла содержать файлы.</summary>
-    public void NoteSeen()
+    /// <summary>Пометить как «уже виденные» все текущие файлы во всех папках (снимок перед стартом).</summary>
+    public void MarkAllExistingAsSeen()
     {
         lock (_lock)
-            foreach (var f in Directory.GetFiles(_historyDir)) _seen.Add(f);
+            foreach (var dir in _searchDirs)
+                foreach (var f in SafeGetFiles(dir))
+                    _seen.Add(f);
     }
 
     /// <summary>
@@ -53,26 +37,35 @@ public sealed class ResultWatcher : IDisposable
     {
         lock (_lock)
         {
-            foreach (var file in Directory.GetFiles(_historyDir))
+            foreach (var dir in _searchDirs)
             {
-                if (_seen.Contains(file)) continue;
-                if (!ForensicFiles.IsBenchmarkResultFile(file))
+                foreach (var file in SafeGetFiles(dir))
                 {
-                    _seen.Add(file); // не наше — больше не проверяем
-                    continue;
+                    if (_seen.Contains(file)) continue;
+
+                    if (!ForensicFiles.IsBenchmarkResultFile(file))
+                    {
+                        _seen.Add(file); // не наше — больше не проверяем
+                        continue;
+                    }
+
+                    var result = BenchmarkResult.TryLoad(file);
+                    if (result is null) continue; // ещё дописывается или битый — проверим позже
+
+                    _seen.Add(file);
+                    return (file, result);
                 }
-
-                var result = BenchmarkResult.TryLoad(file);
-                if (result is null) continue; // ещё дописывается — проверим позже
-
-                _seen.Add(file);
-                return (file, result);
             }
             return null;
         }
     }
 
-    private void NoteIfSeen(string path) => _seen.Add(path);
+    private static IEnumerable<string> SafeGetFiles(string dir)
+    {
+        if (!Directory.Exists(dir)) yield break;
+        foreach (var f in Directory.EnumerateFiles(dir))
+            yield return f;
+    }
 }
 
 /// <summary>
