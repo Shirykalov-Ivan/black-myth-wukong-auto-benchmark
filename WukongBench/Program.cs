@@ -65,10 +65,10 @@ public static class Program
             var outputDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "WukongBench", "results", DateTime.Now.ToString("yyyyMMdd_HHmmss"));
             Directory.CreateDirectory(outputDir);
 
-            // Весь вывод консоли дублируется в журнал прогона, включая exceptions.
+            // Весь вывод консоли дублируется в журнал прогона, включая exceptions
             return RunMain(args, benchmarkDir, exePath, iniPath, historyDirs, outputDir, settings);
         }
-catch (Exception e)
+        catch (Exception e)
         {
             Console.Error.WriteLine($"Ошибка: {e.Message}");
             Console.Error.WriteLine("Подробности: см. stack trace выше.");
@@ -92,7 +92,7 @@ catch (Exception e)
         }
         catch
         {
-            // лог — не самоцель
+            // лог
         }
     }
 
@@ -106,7 +106,7 @@ catch (Exception e)
         string outputDir,
         SettingsFile settings)
     {
-        // Лог пишем с самого начала — чтобы исключения попадали в run.log.
+        // Лог пишем с самого начала — чтобы исключения попадали в run.log
         using var log = new StreamWriter(Path.Combine(outputDir, "run.log"), append: false, Encoding.UTF8);
         using (var teeOut = new TeeTextWriter(Console.Out, log))
         using (var teeErr = new TeeTextWriter(Console.Error, log))
@@ -149,7 +149,7 @@ catch (Exception e)
         Console.CancelKeyPress += (_, _) => SafeRestore(settings);
         try
         {
-            // Если в прошлый раз игра не закрылась — прибраться.
+            // Если в прошлый раз игра не закрылась — прибраться
             runner.KillAnyStale(allowMissing: true);
 
             foreach (var profile in new[] { BenchmarkProfile.Cpu, BenchmarkProfile.Gpu })
@@ -164,7 +164,7 @@ catch (Exception e)
 
                 Console.WriteLine($"[{profile.Name}-тест] Готово: средний FPS {result.FPSAvg:0}, доля кадров, где CPU дольше GPU: {result.CpuBoundShare:0}%");
 
-                // Между проходами даём системе остыть и окну полностью закрыться.
+                // Между проходами даём системе остыть и окну полностью закрыться
                 if (profile.Name == "CPU")
                 {
                     Console.WriteLine("Пауза перед GPU-тестом (10 с)...");
@@ -217,7 +217,7 @@ catch (Exception e)
 
     /// <summary>
     /// Демонстрационный режим: не запускает бенчмарк, а строит отчёт на синтетических данных
-    /// (чтобы показать формат вывода без установленного Benchmark Tool). Отчёт явно помечен как demo.
+    /// (чтобы показать формат вывода без установленного Benchmark Tool). Отчёт явно помечен как demo
     /// </summary>
     private static int RunDemo(string demoDir)
     {
@@ -236,7 +236,7 @@ catch (Exception e)
         var report = ReportPrinter.Build(system, demo);
         var demoNotice = new StringBuilder();
         demoNotice.AppendLine("┌──────────────────────────────────────────────────────────────────────────┐");
-        demoNotice.AppendLine("│ ДЕМОНСТРАЦИОННЫЙ РЕЖИМ: результаты СИНТЕТИЧЕСКИЕ, бенчмарк не запускался. │");
+        demoNotice.AppendLine("│ ДЕМОНСТРАЦИОННЫЙ РЕЖИМ: результаты ПРИМЕРНЫЕ, бенчмарк не запускался. │");
         demoNotice.AppendLine("│ Запуск бенчмарка:  WukongBench.exe  (без --demo).                        │");
         demoNotice.AppendLine("└──────────────────────────────────────────────────────────────────────────┘");
 
