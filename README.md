@@ -20,9 +20,6 @@
 - Права на запись в папке установки бенчмарка (обычно `C:\Program Files (x86)\Steam\...` — запускайте консоль от имени администратора, либо перенесите игру в библиотеку Steam на другом диске).
 - Во время прогона **не трогайте мышь и клавиатуру** — инструмент сам нажимает кнопки в меню бенчмарка.
 
-> **Почему нужен запущенный Steam?** У Benchmark Tool есть проверка прав через Steam API
-> (`Failed entitlement check with Steam API` без него).
-
 ## Сборка и запуск
 
 Нужен [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) (на Linux тоже собирается):
@@ -39,7 +36,7 @@ dotnet run -c Release --project WukongBench
 dotnet run -c Release --project WukongBench -- "D:\SteamLibrary\steamapps\common\Black Myth Wukong Benchmark Tool"
 ```
 
-### .exe (без установки .NET у пользователя)
+### Сборка .exe
 
 ```bash
 dotnet publish -c Release -r win-x64 --self-contained false -o ./publish
